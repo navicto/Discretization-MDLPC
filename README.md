@@ -1,10 +1,12 @@
 # Discretization-MDLPC
-Implementation of Fayyad and Irani's MDLPC discretiation algorithm
+Python implementation of Fayyad and Irani's MDLPC discretiation algorithm
 
 Reference:
+
 Irani, Keki B. "Multi-interval discretization of continuous-valued attributes for classiﬁcation learning." (1993).
 
 Instructions:
+
 1. Download Entropy.py and MDLPC.py
 2. In a terminal, cd into the directory where the .py files were saved
 3. run the following command:
