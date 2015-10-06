@@ -20,5 +20,6 @@ script options:
 * return_bins (optional): Doesn't take on values. If specified (--return_bins), a text file will be saved in the same directory as out_path. This file will include the description of the bins computed by the algorighm.
 
 **Dependencies**
+
 1. Pandas
 2. Numpy
