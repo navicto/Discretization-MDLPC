@@ -11,9 +11,9 @@ Instructions:
   python MDLPC.py --options=...
   
   script options:
-  in_path (required): Path to dataset in .csv format (must include header)
-  out_path (required): Path where the discretized dataset will be saved
-  features (optional): comma-separated list of attribute names to be discretized, e.g., features=attr1,attr2,attr3
-  class_label (required): label of class column in .csv dataset
-  return_bins (optional): Doesn't take on values. If specified (--return_bins), a text file will be saved in the same directory as out_path. This file will include the description of the bins computed by the algorighm.
+  *in_path (required): Path to dataset in .csv format (must include header)
+  *out_path (required): Path where the discretized dataset will be saved
+  *features (optional): comma-separated list of attribute names to be discretized, e.g., features=attr1,attr2,attr3
+  *class_label (required): label of class column in .csv dataset
+  *return_bins (optional): Doesn't take on values. If specified (--return_bins), a text file will be saved in the same directory as out_path. This file will include the description of the bins computed by the algorighm.
 
