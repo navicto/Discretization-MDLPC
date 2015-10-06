@@ -53,15 +53,3 @@ def cut_point_information_gain(dataset, cut_point, feature_label, class_label):
         (N_right / N) * entropy(data_right[class_label])
 
     return gain
-
-def main():
-    data = pd.DataFrame(index=range(10), data={'attr': [random.random() for i in range(10)],
-                                               'class': ['Y' if random.random() > 0.5 else 'N' for i in range(10)]})
-
-    entropy_full = entropy(data['class'])
-    cut_point = 0.3
-    info_gain = cut_point_information_gain(dataset=data, cut_point=cut_point, feature_label='attr', class_label='class')
-    print 5
-
-if __name__ == '__main__':
-    main()
