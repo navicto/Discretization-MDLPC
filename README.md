@@ -1,5 +1,5 @@
-# Discretization-MDLPC
-Python implementation of Fayyad and Irani's MDLPC discretiation algorithm
+# Discretization-MDLP
+Python implementation of Fayyad and Irani's MDLP criterion discretiation algorithm
 
 **Reference:**
 
