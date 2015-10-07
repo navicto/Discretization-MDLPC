@@ -1,4 +1,4 @@
-# Discretization-MDLP
+# Discretization MDLP
 Python implementation of Fayyad and Irani's MDLP criterion discretiation algorithm
 
 **Reference:**
