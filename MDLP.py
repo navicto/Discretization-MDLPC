@@ -1,15 +1,18 @@
 from __future__ import division
 __author__ = 'Victor Ruiz, vmr11@pitt.edu'
-import pandas as pd
 import numpy as np
-from Entropy import entropy, cut_point_information_gain
+from Entropy import entropy_numpy, cut_point_information_gain_numpy
 from math import log
-import sys
-import getopt
-import re
+from sklearn.base import TransformerMixin
+from sklearn import datasets
+from sklearn.model_selection import train_test_split
 
-class MDLP_Discretizer(object):
-    def __init__(self, dataset, class_label, out_path_data, out_path_bins, features=None):
+def previous_item(a, val):
+    idx = np.where(a == val)[0][0] - 1
+    return a[idx]
+
+class MDLP_Discretizer(TransformerMixin):
+    def __init__(self, features=None, raw_data_shape=None):
         '''
         initializes discretizer object:
             saves raw copy of data and creates self._data with only features to discretize and class
@@ -19,46 +22,70 @@ class MDLP_Discretizer(object):
             self._class_name = label of class in pandas dataframe
             self._data = partition of data with only features of interest and class
             self._cuts = dictionary with cut points for each feature
-        :param dataset: pandas dataframe with data to discretize
+        :param X: pandas dataframe with data to discretize
         :param class_label: name of the column containing class in input dataframe
         :param features: if !None, features that the user wants to discretize specifically
         :return:
         '''
+        #Initialize descriptions of discretizatino bins
+        self._bin_descriptions = {}
 
-        if not isinstance(dataset, pd.core.frame.DataFrame):  # class needs a pandas dataframe
-            raise AttributeError('input dataset should be a pandas data frame')
+        #Create array with attr indices to discretize
+        if features is None:  # Assume all columns are numeric and need to be discretized
+            if raw_data_shape is None:
+                raise Exception("If feautes=None, raw_data_shape must be a non-empty tuple")
+            self._col_idx = range(raw_data_shape[1])
+        else:
+            if not isinstance(features, np.ndarray):
+                features = np.array(features)
+            if np.issubdtype(features.dtype, np.integer):
+                self._col_idx = features
+            elif np.issubdtype(features.dtype, np.bool):  # features passed as mask
+                if raw_data_shape is None:
+                    raise Exception('If features is a boolean array, raw_data_shape must be != None')
+                if len(features) != self._data_raw.shape[1]:
+                    raise Exception('Column boolean mask must be of dimensions (NColumns,)')
+                self._col_idx = np.where(features)
+            else:
+                raise Exception('features argument must a np.array of column indices or a boolean mask')
 
-        self._data_raw = dataset #copy or original input data
+    def fit(self, X, y):
+        self._data_raw = X  # copy of original input data
+        self._class_labels = y.reshape(-1, 1)  # make sure class labels is a column vector
+        self._classes = np.unique(self._class_labels)
 
-        self._class_name = class_label
 
-        self._classes = self._data_raw[self._class_name].unique()
+        if len(self._col_idx) != self._data_raw.shape[1]:  # some columns will not be discretized
+            self._ignore_col_idx = np.array([var for var in range(self._data_raw.shape[1]) if var not in self._col_idx])
 
+        # initialize feature bins cut points
+        self._cuts = {f: [] for f in self._col_idx}
 
-        #if user specifies which attributes to discretize
-        if features:
-            self._features = [f for f in features if f in self._data_raw.columns]  # check if features in dataframe
-            missing = set(features) - set(self._features)  # specified columns not in dataframe
-            if missing:
-                print 'WARNING: user-specified features %s not in input dataframe' % str(missing)
-        else:  # then we need to recognize which features are numeric
-            numeric_cols = self._data_raw._data.get_numeric_data().items
-            self._features = [f for f in numeric_cols if f != class_label]
-        #other features that won't be discretized
-        self._ignored_features = set(self._data_raw.columns) - set(self._features)
-
-        #create copy of data only including features to discretize and class
-        self._data = self._data_raw.loc[:, self._features + [class_label]]
-        #pre-compute all boundary points in dataset
+        # pre-compute all boundary points in dataset
         self._boundaries = self.compute_boundary_points_all_features()
-        #initialize feature bins with empty arrays
-        self._cuts = {f: [] for f in self._features}
-        #get cuts for all features
-        self.all_features_accepted_cutpoints()
-        #discretize self._data
-        self.apply_cutpoints(out_data_path=out_path_data, out_bins_path=out_path_bins)
 
-    def MDLPC_criterion(self, data, feature, cut_point):
+        # get cuts for all features
+        self.all_features_accepted_cutpoints()
+
+        #generate bin string descriptions
+        self.generate_bin_descriptions()
+
+        #Generate one-hot encoding schema
+
+        return self
+
+    def transform(self, X, inplace=False):
+        if inplace:
+            discretized = X
+        else:
+            discretized = X.copy()
+        discretized = self.apply_cutpoints(discretized)
+        return discretized
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X, y)
+        return self.transform(X, inplace=True)
+
+    def MDLPC_criterion(self, X, y, feature_idx, cut_point):
         '''
         Determines whether a partition is accepted according to the MDLPC criterion
         :param feature: feature of interest
@@ -67,21 +94,19 @@ class MDLP_Discretizer(object):
         :return: True/False, whether to accept the partition
         '''
         #get dataframe only with desired attribute and class columns, and split by cut_point
-        data_partition = data.copy(deep=True)
-        data_left = data_partition[data_partition[feature] <= cut_point]
-        data_right = data_partition[data_partition[feature] > cut_point]
+        left_mask = X <= cut_point
+        right_mask = X > cut_point
 
         #compute information gain obtained when splitting data at cut_point
-        cut_point_gain = cut_point_information_gain(dataset=data_partition, cut_point=cut_point,
-                                                    feature_label=feature, class_label=self._class_name)
+        cut_point_gain = cut_point_information_gain_numpy(X, y, cut_point)
         #compute delta term in MDLPC criterion
-        N = len(data_partition) # number of examples in current partition
-        partition_entropy = entropy(data_partition[self._class_name])
-        k = len(data_partition[self._class_name].unique())
-        k_left = len(data_left[self._class_name].unique())
-        k_right = len(data_right[self._class_name].unique())
-        entropy_left = entropy(data_left[self._class_name])  # entropy of partition
-        entropy_right = entropy(data_right[self._class_name])
+        N = len(X) # number of examples in current partition
+        partition_entropy = entropy_numpy(y)
+        k = len(np.unique(y))
+        k_left = len(np.unique(y[left_mask]))
+        k_right = len(np.unique(y[right_mask]))
+        entropy_left = entropy_numpy(y[left_mask])  # entropy of partition
+        entropy_right = entropy_numpy(y[right_mask])
         delta = log(3 ** k, 2) - (k * partition_entropy) + (k_left * entropy_left) + (k_right * entropy_right)
 
         #to split or not to split
@@ -92,50 +117,49 @@ class MDLP_Discretizer(object):
         else:
             return False
 
-    def feature_boundary_points(self, data, feature):
+    def feature_boundary_points(self, values):
         '''
         Given an attribute, find all potential cut_points (boundary points)
         :param feature: feature of interest
         :param partition_index: indices of rows for which feature value falls whithin interval of interest
         :return: array with potential cut_points
         '''
-        #get dataframe with only rows of interest, and feature and class columns
-        data_partition = data.copy(deep=True)
-        data_partition.sort(feature, ascending=True, inplace=True)
 
-        boundary_points = []
+        missing_mask = np.isnan(values)
+        data_partition = np.concatenate([values[:, np.newaxis], self._class_labels], axis=1)
+        data_partition = data_partition[~missing_mask]
+        #sort data by values
+        data_partition = data_partition[data_partition[:, 0].argsort()]
 
-        #add temporary columns
-        data_partition['class_offset'] = data_partition[self._class_name].shift(1)  # column where first value is now second, and so forth
-        data_partition['feature_offset'] = data_partition[feature].shift(1)  # column where first value is now second, and so forth
-        data_partition['feature_change'] = (data_partition[feature] != data_partition['feature_offset'])
-        data_partition['mid_points'] = data_partition.loc[:, [feature, 'feature_offset']].mean(axis=1)
-
-        potential_cuts = data_partition[data_partition['feature_change'] == True].index[1:]
-        sorted_index = data_partition.index.tolist()
-
-        for row in potential_cuts:
-            old_value = data_partition.loc[sorted_index[sorted_index.index(row) - 1]][feature]
-            new_value = data_partition.loc[row][feature]
-            old_classes = data_partition[data_partition[feature] == old_value][self._class_name].unique()
-            new_classes = data_partition[data_partition[feature] == new_value][self._class_name].unique()
-            if len(set.union(set(old_classes), set(new_classes))) > 1:
-                boundary_points += [data_partition.loc[row]['mid_points']]
-
-        return set(boundary_points)
+        #Get unique values in column
+        unique_vals = np.unique(data_partition[:, 0])  # each of this could be a bin boundary
+        #Find if when feature changes there are different class values
+        boundaries = []
+        for i in range(1, unique_vals.size):  # By definition first unique value cannot be a boundary
+            previous_val_idx = np.where(data_partition[:, 0] == unique_vals[i-1])[0]
+            current_val_idx = np.where(data_partition[:, 0] == unique_vals[i])[0]
+            merged_classes = np.union1d(data_partition[previous_val_idx, 1], data_partition[current_val_idx, 1])
+            if merged_classes.size > 1:
+                boundaries += [unique_vals[i]]
+        boundaries_offset = np.array([previous_item(unique_vals, var) for var in boundaries])
+        return (np.array(boundaries) + boundaries_offset) / 2
 
     def compute_boundary_points_all_features(self):
         '''
         Computes all possible boundary points for each attribute in self._features (features to discretize)
         :return:
         '''
-        boundaries = {}
-        for attr in self._features:
-            data_partition = self._data.loc[:, [attr, self._class_name]]
-            boundaries[attr] = self.feature_boundary_points(data=data_partition, feature=attr)
-        return boundaries
+        def padded_cutpoints_array(arr, N):
+            cutpoints = self.feature_boundary_points(arr)
+            padding = np.array([np.nan] * (N - len(cutpoints)))
+            return np.concatenate([cutpoints, padding])
 
-    def boundaries_in_partition(self, data, feature):
+        boundaries = np.empty(self._data_raw.shape)
+        boundaries[:, self._col_idx] = np.apply_along_axis(padded_cutpoints_array, 0, self._data_raw[:, self._col_idx], self._data_raw.shape[0])
+        mask = np.all(np.isnan(boundaries), axis=1)
+        return boundaries[~mask]
+
+    def boundaries_in_partition(self, X, feature_idx):
         '''
         From the collection of all cut points for all features, find cut points that fall within a feature-partition's
         attribute-values' range
@@ -143,66 +167,65 @@ class MDLP_Discretizer(object):
         :param feature: attribute of interest
         :return: points within feature's range
         '''
-        range_min, range_max = (data[feature].min(), data[feature].max())
-        return set([x for x in self._boundaries[feature] if (x > range_min) and (x < range_max)])
+        range_min, range_max = (X.min(), X.max())
+        mask = np.logical_and((self._boundaries[:, feature_idx] > range_min), (self._boundaries[:, feature_idx] < range_max))
+        return np.unique(self._boundaries[:, feature_idx][mask])
 
-    def best_cut_point(self, data, feature):
+    def best_cut_point(self, X, y, feature_idx):
         '''
         Selects the best cut point for a feature in a data partition based on information gain
         :param data: data partition (pandas dataframe)
         :param feature: target attribute
         :return: value of cut point with highest information gain (if many, picks first). None if no candidates
         '''
-        candidates = self.boundaries_in_partition(data=data, feature=feature)
-        # candidates = self.feature_boundary_points(data=data, feature=feature)
-        if not candidates:
+        candidates = self.boundaries_in_partition(X, feature_idx=feature_idx)
+        if candidates.size == 0:
             return None
-        gains = [(cut, cut_point_information_gain(dataset=data, cut_point=cut, feature_label=feature,
-                                                  class_label=self._class_name)) for cut in candidates]
+        gains = [(cut, cut_point_information_gain_numpy(X, y, cut_point=cut)) for cut in candidates]
         gains = sorted(gains, key=lambda x: x[1], reverse=True)
 
         return gains[0][0] #return cut point
 
-    def single_feature_accepted_cutpoints(self, feature, partition_index=pd.DataFrame().index):
+    def single_feature_accepted_cutpoints(self, X, y, feature_idx):
         '''
         Computes the cuts for binning a feature according to the MDLP criterion
         :param feature: attribute of interest
         :param partition_index: index of examples in data partition for which cuts are required
         :return: list of cuts for binning feature in partition covered by partition_index
         '''
-        if partition_index.size == 0:
-            partition_index = self._data.index  # if not specified, full sample to be considered for partition
 
-        data_partition = self._data.loc[partition_index, [feature, self._class_name]]
-
-        #exclude missing data:
-        if data_partition[feature].isnull().values.any:
-            data_partition = data_partition[~data_partition[feature].isnull()]
+        #Delte missing data
+        mask = np.isnan(X)
+        X = X[~mask]
+        y = y[~mask]
 
         #stop if constant or null feature values
-        if len(data_partition[feature].unique()) < 2:
+        if len(np.unique(X)) < 2:
             return
         #determine whether to cut and where
-        cut_candidate = self.best_cut_point(data=data_partition, feature=feature)
+        cut_candidate = self.best_cut_point(X, y, feature_idx)
         if cut_candidate == None:
             return
-        decision = self.MDLPC_criterion(data=data_partition, feature=feature, cut_point=cut_candidate)
+        decision = self.MDLPC_criterion(X, y, feature_idx, cut_candidate)
+
+        # partition masks
+        left_mask = X <= cut_candidate
+        right_mask = X > cut_candidate
 
         #apply decision
         if not decision:
             return  # if partition wasn't accepted, there's nothing else to do
         if decision:
-            # try:
             #now we have two new partitions that need to be examined
-            left_partition = data_partition[data_partition[feature] <= cut_candidate]
-            right_partition = data_partition[data_partition[feature] > cut_candidate]
-            if left_partition.empty or right_partition.empty:
+            left_partition = X[left_mask]
+            right_partition = X[right_mask]
+            if (left_partition.size == 0) or (right_partition.size == 0):
                 return #extreme point selected, don't partition
-            self._cuts[feature] += [cut_candidate]  # accept partition
-            self.single_feature_accepted_cutpoints(feature=feature, partition_index=left_partition.index)
-            self.single_feature_accepted_cutpoints(feature=feature, partition_index=right_partition.index)
+            self._cuts[feature_idx] += [cut_candidate]  # accept partition
+            self.single_feature_accepted_cutpoints(left_partition, y[left_mask], feature_idx)
+            self.single_feature_accepted_cutpoints(right_partition, y[right_mask], feature_idx)
             #order cutpoints in ascending order
-            self._cuts[feature] = sorted(self._cuts[feature])
+            self._cuts[feature_idx] = sorted(self._cuts[feature_idx])
             return
 
     def all_features_accepted_cutpoints(self):
@@ -210,11 +233,11 @@ class MDLP_Discretizer(object):
         Computes cut points for all numeric features (the ones in self._features)
         :return:
         '''
-        for attr in self._features:
-            self.single_feature_accepted_cutpoints(feature=attr)
+        for attr in self._col_idx:
+            self.single_feature_accepted_cutpoints(X=self._data_raw[:, attr], y=self._class_labels, feature_idx=attr)
         return
 
-    def apply_cutpoints(self, out_data_path=None, out_bins_path=None):
+    def generate_bin_descriptions(self):
         '''
         Discretizes data by applying bins according to self._cuts. Saves a new, discretized file, and a description of
         the bins
@@ -223,80 +246,32 @@ class MDLP_Discretizer(object):
         :return:
         '''
         bin_label_collection = {}
-        for attr in self._features:
+        for attr in self._col_idx:
             if len(self._cuts[attr]) == 0:
-                self._data[attr] = 'All'
                 bin_label_collection[attr] = ['All']
             else:
                 cuts = [-np.inf] + self._cuts[attr] + [np.inf]
                 start_bin_indices = range(0, len(cuts) - 1)
                 bin_labels = ['%s_to_%s' % (str(cuts[i]), str(cuts[i+1])) for i in start_bin_indices]
                 bin_label_collection[attr] = bin_labels
-                self._data[attr] = pd.cut(x=self._data[attr].values, bins=cuts, right=False, labels=bin_labels,
-                                          precision=6, include_lowest=True)
-
-        #reconstitute full data, now discretized
-        if self._ignored_features:
-            to_return = pd.concat([self._data, self._data_raw[list(self._ignored_features)]], axis=1)
-            to_return = to_return[self._data_raw.columns] #sort columns so they have the original order
-        else:
-            to_return = self._data
-
-        #save data as csv
-        if out_data_path:
-            to_return.to_csv(out_data_path)
-        #save bins description
-        if out_bins_path:
-            with open(out_bins_path, 'w') as bins_file:
-                print>>bins_file, 'Description of bins in file: %s' % out_data_path
-                for attr in self._features:
-                    print>>bins_file, 'attr: %s\n\t%s' % (attr, ', '.join([bin_label for bin_label in bin_label_collection[attr]]))
+                self._bin_descriptions[attr] = {i: bin_labels[i] for i in range(len(bin_labels))}
 
 
-
-def main(argv):
-    out_path_data, out_path_bins, return_bins, class_label, features = None, None, False, None, None
-
-    #read command line arguments
-    try:
-        parameters, _ = getopt.getopt(argv, shortopts='', longopts=['in_path=', 'out_path=', 'features=', 'class_label=', 'return_bins'])
-    except:
-        print 'Correct usage: python MDLP.py --in_path=path --out_path=path --features=f1,f2,f3... ' \
-              '--class_label=weather --return_bins'
-        sys.exit(2)
-
-    for opt, value in parameters:
-        if opt == '--in_path':
-            data_path = value
-            if not data_path.endswith('csv') or data_path.endswith('CSV'):
-                print 'Input data must be in csv file format'
-                sys.exit(2)
-            print 'Input file: %s' % data_path
-        elif opt == '--out_path':
-            out_path_data = value
-            if not data_path.endswith('csv') or data_path.endswith('CSV'):
-                out_path_data = '%s.csv' % out_path_data
-            print 'Output file to be saved at: %s' % out_path_data
-        elif opt == '--features':
-            features = re.split(r',', value)
-            features = [f for f in features if f]
-        elif opt == '--return_bins':
-            return_bins = True
-        elif opt == '--class_label':
-            class_label = value
-
-    if return_bins:
-        bins_name = ''.join(re.split(r'\.', out_path_data)[:-1])
-        out_path_bins = '%s_bins.txt' % bins_name
-        print 'Bins information will be saved at: %s' % out_path_bins
-
-    if not class_label:
-        print 'A class label must be specified with the --class_label= option'
-        sys.exit(2)
-
-    #read input data
-    data = pd.read_csv(data_path)
-    discretizer = MDLP_Discretizer(dataset=data, class_label=class_label, features=features, out_path_data=out_path_data, out_path_bins=out_path_bins)
-
-if __name__ == '__main__':
-    main(sys.argv[1:])
+    def apply_cutpoints(self, data):
+        '''
+        Discretizes data by applying bins according to self._cuts. Saves a new, discretized file, and a description of
+        the bins
+        :param out_data_path: path to save discretized data
+        :param out_bins_path: path to save bins description
+        :return:
+        '''
+        for attr in self._col_idx:
+            if len(self._cuts[attr]) == 0:
+                # data[:, attr] = 'All'
+                data[:, attr] = 0
+            else:
+                cuts = [-np.inf] + self._cuts[attr] + [np.inf]
+                discretized_col = np.digitize(x=data[:, attr], bins=cuts, right=False).astype('float') - 1
+                discretized_col[np.isnan(data[:, attr])] = np.nan
+                data[:, attr] = discretized_col
+        return data
