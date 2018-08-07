@@ -6,7 +6,7 @@ Python implementation of Fayyad and Irani's MDLP criterion discretiation algorit
 Irani, Keki B. "Multi-interval discretization of continuous-valued attributes for classiﬁcation learning." (1993).
 
 **Changes:**
-This new release is compatible with Scikit-learn, and may be used as a part of a Scikit-learn pipeline.
+This new release is compatible with Scikit-learn, and may be used as a part of a Scikit-learn pipeline. The old version is still available in release v0.9.
 
 **Dependencies:**
 
